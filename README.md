@@ -2,6 +2,10 @@
 
 Livox ROS Driver 2 is the 2nd-generation driver package used to connect LiDAR products produced by Livox, applicable for ROS (noetic recommended) and ROS2 (foxy or humble recommended).
 
+## modify
+launch 文件中设置发送频率为 100hz ，格式为自定义格式，将会同时发送两种格式。
+自定义格式以 100hz 发送，pcl2 格式频率比自定义格式低，发送到固定的 livox/lidar_pcl2 ，。
+
 ## 1. Preparation
 
 ### 1.1 OS requirements

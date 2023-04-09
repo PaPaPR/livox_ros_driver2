@@ -55,6 +55,7 @@ Lddc::Lddc(int format, int multi_topic, int data_src, int output_type,
   memset(private_pub_, 0, sizeof(private_pub_));
   memset(private_imu_pub_, 0, sizeof(private_imu_pub_));
   global_pub_ = nullptr;
+  global_pub_pcl2_ = nullptr;
   global_imu_pub_ = nullptr;
   cur_node_ = nullptr;
   bag_ = nullptr;
@@ -168,7 +169,9 @@ void Lddc::PollingLidarPointCloudData(uint8_t index, LidarDevice *lidar) {
     if (kPointCloud2Msg == transfer_format_) {
       PublishPointcloud2(p_queue, index);
     } else if (kLivoxCustomMsg == transfer_format_) {
+      auto p_queue_copy = *p_queue;
       PublishCustomPointcloud(p_queue, index);
+      PublishPointcloud2(&p_queue_copy, index);
     } else if (kPclPxyziMsg == transfer_format_) {
       PublishPclMsg(p_queue, index);
     }
@@ -198,6 +201,9 @@ void Lddc::PrepareExit(void) {
 }
 
 void Lddc::PublishPointcloud2(LidarDataQueue *queue, uint8_t index) {
+  int while_times{0}; // 已经循环的次数
+  static int times{0}; // 累计存储的数据次数
+  static StoragePacket pkg_all;
   while(!QueueIsEmpty(queue)) {
     StoragePacket pkg;
     QueuePop(queue, &pkg);
@@ -206,11 +212,25 @@ void Lddc::PublishPointcloud2(LidarDataQueue *queue, uint8_t index) {
       continue;
     }
 
+    if(while_times == 0 && times == 1) {
+      pkg_all.lidar_type = pkg.lidar_type;
+      pkg_all.handle = pkg.handle;
+      pkg_all.base_time = pkg.base_time;
+    }
+    while_times++;
+    pkg_all.points_num += pkg.points_num;
+    pkg_all.points.insert(pkg_all.points.end(), pkg.points.begin(), pkg.points.end());
+  }
+  if(times > 7) {
     PointCloud2 cloud;
     uint64_t timestamp = 0;
-    InitPointcloud2Msg(pkg, cloud, timestamp);
+    InitPointcloud2Msg(pkg_all, cloud, timestamp);
     PublishPointcloud2Data(index, timestamp, cloud);
+    pkg_all.points_num = 0;
+    pkg_all.points.clear();
+    times = 0;
   }
+  times++;
 }
 
 void Lddc::PublishCustomPointcloud(LidarDataQueue *queue, uint8_t index) {
@@ -329,7 +349,24 @@ void Lddc::InitPointcloud2Msg(const StoragePacket& pkg, PointCloud2& cloud, uint
 
 void Lddc::PublishPointcloud2Data(const uint8_t index, const uint64_t timestamp, const PointCloud2& cloud) {
 #ifdef BUILDING_ROS1
-  PublisherPtr publisher_ptr = Lddc::GetCurrentPublisher(index);
+  ros::Publisher **pub = nullptr;
+  uint32_t queue_size = kMinEthPacketQueueSize;
+  pub = &global_pub_pcl2_;
+  queue_size = queue_size * 8;
+  if (*pub == nullptr) {
+    char name_str[48];
+    memset(name_str, 0, sizeof(name_str));
+    snprintf(name_str, sizeof(name_str), "livox/lidar_pcl2");
+    *pub = new ros::Publisher;
+    **pub =
+        cur_node_->GetNode().advertise<sensor_msgs::PointCloud2>(name_str, queue_size);
+    DRIVER_INFO(*cur_node_,
+        "%s publish use PointCloud2 format, set ROS publisher queue size %d",
+        name_str, queue_size);
+  }
+  PublisherPtr publisher_ptr = *pub;
+  publisher_ptr->publish(cloud);
+  // PublisherPtr publisher_ptr = Lddc::GetCurrentPublisher(index);
 #elif defined BUILDING_ROS2
   Publisher<PointCloud2>::SharedPtr publisher_ptr =
     std::dynamic_pointer_cast<Publisher<PointCloud2>>(GetCurrentPublisher(index));
